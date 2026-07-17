@@ -23,8 +23,8 @@ Differences from the Docker manager:
   ``workspace_id``.
 * Idle workspaces are evicted by a background sweeper task started in
   :meth:`__aenter__` and cancelled in :meth:`__aexit__`.
-* ``close_all`` fans calls out with :func:`asyncio.gather` because
-  ``sandbox.pause()`` is a remote round-trip per sandbox.
+* ``close_all`` fans calls out with :func:`asyncio.gather` because the
+  configured remote close action is a round-trip per sandbox.
 """
 
 import asyncio
@@ -64,6 +64,7 @@ class OpenSandboxWorkspaceManager(WorkspaceManagerBase):
         protocol: Literal["http", "https"] = "http",
         request_timeout_seconds: float | None = DEFAULT_REQUEST_TIMEOUT,
         timeout_seconds: int = DEFAULT_TIMEOUT,
+        kill_on_close: bool = False,
         gateway_port: int = DEFAULT_GATEWAY_PORT,
         env: dict[str, str] | None = None,
         sandbox_metadata: dict[str, str] | None = None,
@@ -102,6 +103,10 @@ class OpenSandboxWorkspaceManager(WorkspaceManagerBase):
                 command timeout.
             timeout_seconds (`int`, defaults to `DEFAULT_TIMEOUT`):
                 Sandbox keep-alive / resume timeout.
+            kill_on_close (`bool`, defaults to `False`):
+                When ``True``, closing or evicting a workspace terminates its
+                remote sandbox instead of pausing it. Use this for OpenSandbox
+                runtimes without pause/resume support.
             gateway_port (`int`, defaults to `DEFAULT_GATEWAY_PORT`):
                 TCP port the in-sandbox gateway listens on.
             env (`dict[str, str] | None`, optional):
@@ -139,6 +144,7 @@ class OpenSandboxWorkspaceManager(WorkspaceManagerBase):
         self._protocol = protocol
         self._request_timeout_seconds = request_timeout_seconds
         self._timeout_seconds = timeout_seconds
+        self._kill_on_close = kill_on_close
         self._gateway_port = gateway_port
         self._env = dict(env or {})
         self._sandbox_metadata = dict(sandbox_metadata or {})
@@ -179,6 +185,7 @@ class OpenSandboxWorkspaceManager(WorkspaceManagerBase):
             protocol=self._protocol,
             request_timeout_seconds=self._request_timeout_seconds,
             timeout_seconds=self._timeout_seconds,
+            kill_on_close=self._kill_on_close,
             gateway_port=self._gateway_port,
             env=self._env,
             sandbox_metadata={
@@ -269,7 +276,7 @@ class OpenSandboxWorkspaceManager(WorkspaceManagerBase):
             return ws
 
     async def close(self, workspace_id: str) -> None:
-        """Close (= pause the sandbox) and evict a single workspace."""
+        """Close the sandbox using its configured action and evict it."""
         async with self._lock:
             entry = self._cache.pop(workspace_id, None)
         if entry is None:
@@ -280,8 +287,8 @@ class OpenSandboxWorkspaceManager(WorkspaceManagerBase):
     async def close_all(self) -> None:
         """Close every cached workspace in parallel.
 
-        ``sandbox.pause()`` is a remote round-trip per sandbox; doing
-        it sequentially on shutdown would produce unnecessary latency.
+        The remote close action is a round-trip per sandbox; doing it
+        sequentially on shutdown would produce unnecessary latency.
         """
         async with self._lock:
             entries = list(self._cache.values())

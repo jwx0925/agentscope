@@ -8,6 +8,7 @@ service.
 import os
 import unittest
 from unittest.async_case import IsolatedAsyncioTestCase
+from unittest.mock import AsyncMock
 
 from agentscope.mcp import MCPClient, StdioMCPConfig
 from agentscope.workspace import OpenSandboxWorkspace
@@ -21,6 +22,36 @@ _SKIP_REASON = "OPENSANDBOX_DOMAIN environment variable is not set"
 
 
 # ── lifecycle tests ────────────────────────────────────────────────
+
+
+class TestOpenSandboxWorkspaceTeardown(IsolatedAsyncioTestCase):
+    """Unit tests for OpenSandbox remote lifecycle cleanup."""
+
+    async def test_close_pauses_remote_sandbox_by_default(self) -> None:
+        """The default preserves the existing reattachment behavior."""
+        workspace = OpenSandboxWorkspace()
+        sandbox = AsyncMock()
+        workspace._sandbox = sandbox  # pylint: disable=protected-access
+
+        await workspace.close()
+
+        sandbox.pause.assert_awaited_once_with()
+        sandbox.kill.assert_not_awaited()
+        sandbox.close.assert_awaited_once_with()
+        self.assertIsNone(workspace.sandbox_id)
+
+    async def test_close_can_kill_remote_sandbox_explicitly(self) -> None:
+        """Kill supports runtimes without pause/resume capability."""
+        workspace = OpenSandboxWorkspace(kill_on_close=True)
+        sandbox = AsyncMock()
+        workspace._sandbox = sandbox  # pylint: disable=protected-access
+
+        await workspace.close()
+
+        sandbox.kill.assert_awaited_once_with()
+        sandbox.pause.assert_not_awaited()
+        sandbox.close.assert_awaited_once_with()
+        self.assertIsNone(workspace.sandbox_id)
 
 
 @unittest.skipUnless(_DOMAIN, _SKIP_REASON)

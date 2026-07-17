@@ -56,6 +56,7 @@ class OpenSandboxWorkspace(SandboxedWorkspaceBase):
         protocol: Literal["http", "https"] = "http",
         request_timeout_seconds: float | None = DEFAULT_REQUEST_TIMEOUT,
         timeout_seconds: int = DEFAULT_TIMEOUT,
+        kill_on_close: bool = False,
         gateway_port: int = DEFAULT_GATEWAY_PORT,
         env: dict[str, str] | None = None,
         sandbox_metadata: dict[str, str] | None = None,
@@ -90,6 +91,10 @@ class OpenSandboxWorkspace(SandboxedWorkspaceBase):
                 default in effect.
             timeout_seconds (`int`, defaults to `DEFAULT_TIMEOUT`):
                 Sandbox keep-alive and create/connect/resume timeout.
+            kill_on_close (`bool`, defaults to `False`):
+                When ``True``, :meth:`close` terminates the remote sandbox
+                instead of pausing it. Use this for OpenSandbox runtimes
+                without pause/resume support.
             gateway_port (`int`, defaults to `DEFAULT_GATEWAY_PORT`):
                 TCP port the in-sandbox gateway listens on.
             env (`dict[str, str] | None`, optional):
@@ -127,6 +132,7 @@ class OpenSandboxWorkspace(SandboxedWorkspaceBase):
         self.protocol = protocol
         self.request_timeout_seconds = request_timeout_seconds
         self.timeout_seconds = timeout_seconds
+        self.kill_on_close = kill_on_close
         self.gateway_port = gateway_port
         self.env = dict(env or {})
         self.sandbox_metadata = dict(sandbox_metadata or {})
@@ -166,17 +172,24 @@ class OpenSandboxWorkspace(SandboxedWorkspaceBase):
         self._backend = OpenSandboxBackend(self._sandbox, SANDBOX_WORKDIR)
 
     async def _teardown_backend(self) -> None:
-        """Pause the sandbox (keep filesystem) and drop the handle.
+        """Release the remote sandbox and drop the local handle.
 
-        ``sandbox.pause()`` — not ``kill()`` — so the next
-        :meth:`initialize` can reattach via metadata lookup and
-        resume. Errors are swallowed.
+        Pausing preserves the existing reattachment behavior. Killing is
+        available for OpenSandbox runtimes without pause/resume support or
+        callers that want to terminate the workspace. Errors are swallowed.
         """
         if self._sandbox is not None:
             try:
-                await self._sandbox.pause()
+                if self.kill_on_close:
+                    await self._sandbox.kill()
+                else:
+                    await self._sandbox.pause()
             except Exception as exc:
-                logger.warning("OpenSandboxWorkspace: pause failed: %s", exc)
+                logger.warning(
+                    "OpenSandboxWorkspace: %s failed: %s",
+                    "kill" if self.kill_on_close else "pause",
+                    exc,
+                )
             try:
                 await self._sandbox.close()
             except Exception as exc:
